@@ -1,4 +1,0 @@
-# Railway sets NODE_ENV=production during install, which skips devDependencies
-# unless we explicitly include them (TypeScript, Vite, etc. are required to build).
-[phases.install]
-cmds = ["npm ci --include=dev"]
