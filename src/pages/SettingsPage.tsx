@@ -3,6 +3,7 @@ import { Save } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { useAuthStore } from '../stores/authStore';
 import { condocorps } from '../lib/api';
+import { QuestionPresetsEditor } from '../components/settings/QuestionPresetsEditor';
 
 export function SettingsPage() {
   const { activeCondoCorp } = useAuthStore();
@@ -63,6 +64,16 @@ export function SettingsPage() {
           {saved && <span className="text-sm text-green-600">Settings saved</span>}
         </div>
       </form>
+
+      {activeCondoCorp && (
+        <div className="mt-8">
+          <QuestionPresetsEditor
+            mode="condocorp"
+            condocorpId={activeCondoCorp.id}
+            description="Customize the preset questions residents see on Ask a Question. Defaults come from platform settings until you save your own."
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
 import { getOpenAI } from '../openai.js';
+import { buildSystemPrompt, getLlmPromptTemplate } from '../llm-prompt.js';
 
 const router = Router();
 
@@ -153,17 +154,8 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       .filter(Boolean)
       .join('');
 
-    const systemPrompt = `You are a condominium knowledge assistant.
-
-Answer only using the supplied CondoCorp documentation.
-
-Do not invent policies, fees, procedures, bylaws, or rules.
-
-If the answer is unavailable in the provided documentation, respond with:
-"I could not find information about that in the CondoCorp documentation."
-
-Context:
-${contextBlock}`;
+    const promptTemplate = await getLlmPromptTemplate(pool);
+    const systemPrompt = buildSystemPrompt(promptTemplate, contextBlock);
 
     const completion = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',

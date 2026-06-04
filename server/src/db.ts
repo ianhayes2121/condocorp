@@ -7,7 +7,11 @@ const pool = new pg.Pool({
 });
 
 pool.on('connect', async (client) => {
-  await pgvector.registerTypes(client);
+  try {
+    await pgvector.registerTypes(client);
+  } catch {
+    // Extension may not exist yet on first boot; runMigrations creates it
+  }
 });
 
 export { pool };

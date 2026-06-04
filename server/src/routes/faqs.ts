@@ -35,7 +35,7 @@ router.post('/:condocorpId', requireAuth, async (req, res) => {
     const { condocorpId } = req.params;
 
     const admin = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'board_member', 'property_manager', 'platform_admin') AND status = 'active' LIMIT 1`,
+      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
       [userId, condocorpId]
     );
     if (admin.rows.length === 0) {
@@ -61,7 +61,7 @@ router.put('/:condocorpId/:faqId', requireAuth, async (req, res) => {
     const { condocorpId, faqId } = req.params;
 
     const admin = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'board_member', 'property_manager', 'platform_admin') AND status = 'active' LIMIT 1`,
+      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
       [userId, condocorpId]
     );
     if (admin.rows.length === 0) {
@@ -87,7 +87,7 @@ router.delete('/:condocorpId/:faqId', requireAuth, async (req, res) => {
     const { condocorpId, faqId } = req.params;
 
     const admin = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'board_member', 'property_manager', 'platform_admin') AND status = 'active' LIMIT 1`,
+      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
       [userId, condocorpId]
     );
     if (admin.rows.length === 0) {

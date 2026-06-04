@@ -6,6 +6,9 @@ import { pool } from './db.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function runMigrations() {
+  await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+  await pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS _migrations (
       id serial PRIMARY KEY,

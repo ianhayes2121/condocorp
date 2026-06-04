@@ -3,6 +3,8 @@ import { Plus, Building2, X, Ban, CheckCircle } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { condocorps } from '../lib/api';
+import { QuestionPresetsEditor } from '../components/settings/QuestionPresetsEditor';
+import { LlmPromptEditor } from '../components/settings/LlmPromptEditor';
 
 interface CondoCorpItem {
   id: string;
@@ -107,6 +109,15 @@ export function PlatformAdminPage() {
           </div>
         </form>
       )}
+
+      <div className="mb-8 space-y-8">
+        <LlmPromptEditor />
+        <QuestionPresetsEditor
+          mode="platform"
+          title="Default Suggested Questions"
+          description="Platform-wide preset questions for Ask a Question. New CondoCorps use these until their admin customizes them."
+        />
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {corpList.map(corp => (

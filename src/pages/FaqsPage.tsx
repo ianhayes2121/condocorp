@@ -11,8 +11,11 @@ interface FaqItem {
   created_at: string;
 }
 
+const FAQ_ADMIN_ROLES = ['condocorp_admin', 'platform_admin'] as const;
+
 export function FaqsPage() {
-  const { activeCondoCorp } = useAuthStore();
+  const { activeCondoCorp, activeRole } = useAuthStore();
+  const canManageFaqs = activeRole != null && FAQ_ADMIN_ROLES.includes(activeRole as typeof FAQ_ADMIN_ROLES[number]);
   const [faqList, setFaqList] = useState<FaqItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -74,18 +77,24 @@ export function FaqsPage() {
     <div className="p-6 lg:p-8 max-w-5xl">
       <PageHeader
         title="FAQs"
-        description="Manage frequently asked questions"
+        description={
+          canManageFaqs
+            ? 'Create and manage FAQs for your building'
+            : 'Frequently asked questions for your building'
+        }
         action={
-          <button
-            onClick={() => { resetForm(); setShowForm(true); }}
-            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors"
-          >
-            <Plus size={16} /> Add FAQ
-          </button>
+          canManageFaqs ? (
+            <button
+              onClick={() => { resetForm(); setShowForm(true); }}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors"
+            >
+              <Plus size={16} /> Add FAQ
+            </button>
+          ) : undefined
         }
       />
 
-      {showForm && (
+      {canManageFaqs && showForm && (
         <form onSubmit={saveFaq} className="mb-6 bg-white rounded-xl border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-gray-900">
@@ -143,20 +152,22 @@ export function FaqsPage() {
                   <h4 className="font-medium text-gray-900 mb-2">{faq.question}</h4>
                   <p className="text-sm text-gray-600 whitespace-pre-wrap">{faq.answer}</p>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => startEdit(faq)}
-                    className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-primary-50 transition-colors"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button
-                    onClick={() => deleteFaq(faq.id)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
+                {canManageFaqs && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => startEdit(faq)}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-primary-50 transition-colors"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    <button
+                      onClick={() => deleteFaq(faq.id)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))

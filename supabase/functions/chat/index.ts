@@ -9,6 +9,24 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const CONTEXT_PLACEHOLDER = "{{context}}";
+
+const DEFAULT_LLM_PROMPT_TEMPLATE = `You are a condominium knowledge assistant.
+
+Answer only using the supplied CondoCorp documentation.
+
+Do not invent policies, fees, procedures, bylaws, or rules.
+
+If the answer is unavailable in the provided documentation, respond with:
+"I could not find information about that in the CondoCorp documentation."
+
+Context:
+${CONTEXT_PLACEHOLDER}`;
+
+function buildSystemPrompt(template: string, contextBlock: string): string {
+  return template.split(CONTEXT_PLACEHOLDER).join(contextBlock);
+}
+
 async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
@@ -125,17 +143,18 @@ Deno.serve(async (req: Request) => {
       .filter(Boolean)
       .join("");
 
-    const systemPrompt = `You are a condominium knowledge assistant.
+    const { data: promptRow } = await supabase
+      .from("platform_llm_prompt")
+      .select("template")
+      .eq("id", "default")
+      .maybeSingle();
 
-Answer only using the supplied CondoCorp documentation.
+    const promptTemplate =
+      typeof promptRow?.template === "string" && promptRow.template.trim().length > 0
+        ? promptRow.template
+        : DEFAULT_LLM_PROMPT_TEMPLATE;
 
-Do not invent policies, fees, procedures, bylaws, or rules.
-
-If the answer is unavailable in the provided documentation, respond with:
-"I could not find information about that in the CondoCorp documentation."
-
-Context:
-${contextBlock}`;
+    const systemPrompt = buildSystemPrompt(promptTemplate, contextBlock);
 
     const answer = await chatCompletion(systemPrompt, question);
 

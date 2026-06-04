@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Send, Plus, Copy, Check, FileText, MessageSquare } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAuthStore } from '../stores/authStore';
-import { chat } from '../lib/api';
+import { chat, questionPresets } from '../lib/api';
 import type { SourceCitation } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -19,7 +19,7 @@ interface MessageItem {
   created_at: string;
 }
 
-const SUGGESTED_QUESTIONS = [
+const FALLBACK_SUGGESTED_QUESTIONS = [
   'What are the pet policies in our building?',
   'What are the parking rules?',
   'When is the next annual general meeting?',
@@ -30,6 +30,7 @@ const SUGGESTED_QUESTIONS = [
 
 export function ChatPage() {
   const { activeCondoCorp } = useAuthStore();
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>(FALLBACK_SUGGESTED_QUESTIONS);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [activeConversation, setActiveConversation] = useState<ConversationItem | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -42,6 +43,16 @@ export function ChatPage() {
   useEffect(() => {
     if (!activeCondoCorp) return;
     chat.conversations(activeCondoCorp.id).then(setConversations).catch(() => {});
+  }, [activeCondoCorp]);
+
+  useEffect(() => {
+    if (!activeCondoCorp) return;
+    questionPresets.list(activeCondoCorp.id)
+      .then(data => {
+        const texts = data.presets.map(p => p.text);
+        if (texts.length > 0) setSuggestedQuestions(texts);
+      })
+      .catch(() => setSuggestedQuestions(FALLBACK_SUGGESTED_QUESTIONS));
   }, [activeCondoCorp]);
 
   useEffect(() => {
@@ -171,7 +182,7 @@ export function ChatPage() {
                 Ask me anything about your condo's bylaws, rules, policies, and more.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg">
-                {SUGGESTED_QUESTIONS.map(q => (
+                {suggestedQuestions.map(q => (
                   <button
                     key={q}
                     onClick={() => sendMessage(q)}

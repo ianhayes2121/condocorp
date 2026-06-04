@@ -80,6 +80,12 @@ export interface FAQ {
   created_at: string;
 }
 
+export interface QuestionPreset {
+  id: string;
+  text: string;
+  sort_order: number;
+}
+
 export interface Conversation {
   id: string;
   condocorp_id: string;

@@ -7,9 +7,11 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n web,api -c blue,green \"vite\" \"tsx watch server/src/index.ts\"",
     "dev:server": "tsx watch server/src/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
     "build": "tsc -b && vite build",
     "start": "node --import tsx server/src/index.ts",
     "lint": "eslint .",
@@ -19,6 +21,7 @@
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "date-fns": "^4.4.0",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^1.17.0",

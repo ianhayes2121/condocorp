@@ -2,7 +2,7 @@
 -- INVITATIONS TABLE
 -- ============================================================
 
-create table invitations (
+create table if not exists invitations (
   id uuid primary key default gen_random_uuid(),
   condocorp_id uuid not null references condocorps(id) on delete cascade,
   email text not null,

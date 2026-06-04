@@ -130,6 +130,58 @@ export const invitations = {
     request<Array<{ id: string; email: string; role: string; status: string; created_at: string; expires_at: string; invited_by_first: string; invited_by_last: string }>>(`/api/invitations/${condocorpId}`),
 };
 
+// Platform LLM prompt (SuperAdmin)
+export const platformLlmPrompt = {
+  get: () =>
+    request<{
+      template: string;
+      default_template: string;
+      context_placeholder: string;
+      updated_at: string | null;
+    }>('/api/platform/llm-prompt'),
+  update: (template: string) =>
+    request<{
+      template: string;
+      default_template: string;
+      context_placeholder: string;
+      updated_at: string;
+    }>('/api/platform/llm-prompt', {
+      method: 'PUT',
+      body: JSON.stringify({ template }),
+    }),
+};
+
+// Question presets (Ask a Question suggested questions)
+export const questionPresets = {
+  listPlatform: () =>
+    request<Array<{ id: string; text: string; sort_order: number }>>('/api/question-presets/platform'),
+  updatePlatform: (texts: string[]) =>
+    request<Array<{ id: string; text: string; sort_order: number }>>('/api/question-presets/platform', {
+      method: 'PUT',
+      body: JSON.stringify({ texts }),
+    }),
+  list: (condocorpId: string) =>
+    request<{ source: 'platform' | 'condocorp'; presets: Array<{ id: string; text: string; sort_order: number }> }>(
+      `/api/question-presets/${condocorpId}`
+    ),
+  manage: (condocorpId: string) =>
+    request<{
+      using_platform_defaults: boolean;
+      presets: Array<{ id: string; text: string; sort_order: number }>;
+      platform_presets: Array<{ id: string; text: string; sort_order: number }>;
+    }>(`/api/question-presets/${condocorpId}/manage`),
+  update: (condocorpId: string, texts: string[]) =>
+    request<{ using_platform_defaults: boolean; presets: Array<{ id: string; text: string; sort_order: number }> }>(
+      `/api/question-presets/${condocorpId}`,
+      { method: 'PUT', body: JSON.stringify({ texts }) }
+    ),
+  reset: (condocorpId: string) =>
+    request<{ using_platform_defaults: boolean; presets: Array<{ id: string; text: string; sort_order: number }> }>(
+      `/api/question-presets/${condocorpId}`,
+      { method: 'DELETE' }
+    ),
+};
+
 // Chat
 export const chat = {
   conversations: (condocorpId: string) =>
