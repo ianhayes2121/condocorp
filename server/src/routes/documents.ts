@@ -2,14 +2,13 @@ import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import OpenAI from 'openai';
 import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { getOpenAI } from '../openai.js';
 
 const router = Router();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? './uploads';
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -79,7 +78,7 @@ async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const allEmbeddings: number[][] = [];
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize);
-    const response = await openai.embeddings.create({ model: 'text-embedding-3-small', input: batch });
+    const response = await getOpenAI().embeddings.create({ model: 'text-embedding-3-small', input: batch });
     for (const item of response.data) allEmbeddings.push(item.embedding);
   }
   return allEmbeddings;

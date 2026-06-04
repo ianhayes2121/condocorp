@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import OpenAI from 'openai';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { getOpenAI } from '../openai.js';
 
 const router = Router();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Get conversations
 router.get('/:condocorpId/conversations', requireAuth, async (req, res) => {
@@ -100,7 +99,7 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
     );
 
     // Generate embedding for the question
-    const embeddingResponse = await openai.embeddings.create({
+    const embeddingResponse = await getOpenAI().embeddings.create({
       model: 'text-embedding-3-small',
       input: question,
     });
@@ -166,7 +165,7 @@ If the answer is unavailable in the provided documentation, respond with:
 Context:
 ${contextBlock}`;
 
-    const completion = await openai.chat.completions.create({
+    const completion = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
