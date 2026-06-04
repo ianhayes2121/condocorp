@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { hasCondoCorpAccess, hasCondoCorpAdminAccess } from '../access.js';
 
 const router = Router();
 
@@ -99,11 +100,7 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
 router.put('/:id', requireAuth, async (req, res) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
-      [userId, req.params.id]
-    );
-    if (member.rows.length === 0) {
+    if (!(await hasCondoCorpAdminAccess(userId, req.params.id))) {
       res.status(403).json({ error: 'Admin access required' });
       return;
     }
@@ -126,11 +123,7 @@ router.get('/:id/stats', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const condocorpId = req.params.id;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) {
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -162,11 +155,7 @@ router.get('/:id/activity', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const condocorpId = req.params.id;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) {
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { hasCondoCorpAccess } from '../access.js';
 import { getOpenAI } from '../openai.js';
 import { buildSystemPrompt, getLlmPromptTemplate } from '../llm-prompt.js';
 
@@ -12,11 +13,10 @@ router.get('/:condocorpId/conversations', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     const result = await pool.query(
       'SELECT * FROM conversations WHERE condocorp_id = $1 AND user_id = $2 ORDER BY created_at DESC',
@@ -35,11 +35,10 @@ router.post('/:condocorpId/conversations', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     const result = await pool.query(
       'INSERT INTO conversations (condocorp_id, user_id) VALUES ($1, $2) RETURNING *',
@@ -87,11 +86,10 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       return;
     }
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     // Store user message
     await pool.query(

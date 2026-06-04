@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { hasCondoCorpAccess, hasCondoCorpAdminAccess } from '../access.js';
 
 const router = Router();
 
@@ -10,11 +11,7 @@ router.get('/:condocorpId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) {
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -41,15 +38,7 @@ router.post('/:condocorpId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    const admin = await pool.query(
-      `SELECT 1 FROM condocorp_memberships
-       WHERE user_id = $1 AND status = 'active'
-         AND ((condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin'))
-              OR role = 'platform_admin')
-       LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (admin.rows.length === 0) {
+    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Admin access required' });
       return;
     }
@@ -130,11 +119,7 @@ router.patch('/:condocorpId/:membershipId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId, membershipId } = req.params;
 
-    const admin = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (admin.rows.length === 0) {
+    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Admin access required' });
       return;
     }

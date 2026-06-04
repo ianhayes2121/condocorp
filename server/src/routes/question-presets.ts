@@ -1,32 +1,9 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { isPlatformAdmin, hasCondoCorpAccess, hasCondoCorpAdminAccess } from '../access.js';
 
 const router = Router();
-
-async function isPlatformAdmin(userId: string): Promise<boolean> {
-  const result = await pool.query(
-    `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND role = 'platform_admin' AND status = 'active' LIMIT 1`,
-    [userId]
-  );
-  return result.rows.length > 0;
-}
-
-async function isCondoCorpAdmin(userId: string, condocorpId: string): Promise<boolean> {
-  const result = await pool.query(
-    `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
-    [userId, condocorpId]
-  );
-  return result.rows.length > 0;
-}
-
-async function hasActiveMembership(userId: string, condocorpId: string): Promise<boolean> {
-  const result = await pool.query(
-    `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-    [userId, condocorpId]
-  );
-  return result.rows.length > 0;
-}
 
 function normalizePresetTexts(texts: unknown): string[] | null {
   if (!Array.isArray(texts)) return null;
@@ -88,7 +65,7 @@ router.get('/:condocorpId/manage', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    if (!(await isCondoCorpAdmin(userId, condocorpId))) {
+    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -120,7 +97,7 @@ router.put('/:condocorpId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    if (!(await isCondoCorpAdmin(userId, condocorpId))) {
+    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -155,7 +132,7 @@ router.delete('/:condocorpId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    if (!(await isCondoCorpAdmin(userId, condocorpId))) {
+    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -178,7 +155,7 @@ router.get('/:condocorpId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    if (!(await hasActiveMembership(userId, condocorpId))) {
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }

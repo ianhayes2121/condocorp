@@ -32,13 +32,20 @@ interface AuthState {
   memberships: Membership[];
   activeCondoCorp: ActiveCondoCorp | null;
   activeRole: Role | null;
+  isPlatformAdmin: boolean;
+  /** Platform admin is viewing a corp with condo-admin UI and API access */
+  viewingAsCondoAdmin: boolean;
   loading: boolean;
   initialized: boolean;
   initialize: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => void;
   setActiveCondoCorp: (condocorp: ActiveCondoCorp, role: Role) => void;
+  enterCondoCorpAsAdmin: (condocorp: ActiveCondoCorp) => void;
+  clearCondoCorpView: () => void;
   loadMemberships: () => Promise<void>;
+  /** Role used for sidebar navigation */
+  navRole: () => Role | null;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -46,8 +53,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   memberships: [],
   activeCondoCorp: null,
   activeRole: null,
+  isPlatformAdmin: false,
+  viewingAsCondoAdmin: false,
   loading: true,
   initialized: false,
+
+  navRole: () => {
+    const { viewingAsCondoAdmin, activeRole } = get();
+    if (viewingAsCondoAdmin) return 'condocorp_admin';
+    return activeRole;
+  },
 
   initialize: async () => {
     const token = localStorage.getItem('token');
@@ -76,31 +91,83 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signOut: () => {
     localStorage.removeItem('token');
     localStorage.removeItem('activeCondoCorpId');
-    set({ profile: null, memberships: [], activeCondoCorp: null, activeRole: null });
+    localStorage.removeItem('viewingAsCondoAdmin');
+    set({
+      profile: null,
+      memberships: [],
+      activeCondoCorp: null,
+      activeRole: null,
+      isPlatformAdmin: false,
+      viewingAsCondoAdmin: false,
+    });
   },
 
   setActiveCondoCorp: (condocorp, role) => {
-    set({ activeCondoCorp: condocorp, activeRole: role });
+    set({ activeCondoCorp: condocorp, activeRole: role, viewingAsCondoAdmin: false });
     localStorage.setItem('activeCondoCorpId', condocorp.id);
+    localStorage.removeItem('viewingAsCondoAdmin');
+  },
+
+  enterCondoCorpAsAdmin: (condocorp) => {
+    set({
+      activeCondoCorp: condocorp,
+      activeRole: 'condocorp_admin',
+      viewingAsCondoAdmin: true,
+    });
+    localStorage.setItem('activeCondoCorpId', condocorp.id);
+    localStorage.setItem('viewingAsCondoAdmin', 'true');
+  },
+
+  clearCondoCorpView: () => {
+    set({ activeCondoCorp: null, activeRole: 'platform_admin', viewingAsCondoAdmin: false });
+    localStorage.removeItem('activeCondoCorpId');
+    localStorage.removeItem('viewingAsCondoAdmin');
   },
 
   loadMemberships: async () => {
     try {
       const data = await condocorps.list();
-      set({ memberships: data as Membership[] });
+      const memberships = data as Membership[];
+      const isPlatformAdmin = memberships.some(m => m.role === 'platform_admin');
+      set({ memberships, isPlatformAdmin });
 
       const savedId = localStorage.getItem('activeCondoCorpId');
+      const viewingAsCondoAdmin = localStorage.getItem('viewingAsCondoAdmin') === 'true';
       const current = get().activeCondoCorp;
-      if (!current && data.length > 0) {
+
+      if (viewingAsCondoAdmin && isPlatformAdmin && savedId) {
+        try {
+          const all = await condocorps.listAll();
+          const corp = all.find(c => c.id === savedId);
+          if (corp) {
+            set({
+              activeCondoCorp: { id: corp.id, name: corp.name, address: corp.address, status: corp.status },
+              activeRole: 'condocorp_admin',
+              viewingAsCondoAdmin: true,
+            });
+            return;
+          }
+        } catch {
+          // fall through
+        }
+        localStorage.removeItem('viewingAsCondoAdmin');
+        localStorage.removeItem('activeCondoCorpId');
+        set({ activeCondoCorp: null, activeRole: 'platform_admin', viewingAsCondoAdmin: false });
+        return;
+      }
+
+      if (!current && data.length > 0 && !isPlatformAdmin) {
         const match = savedId ? data.find(m => m.id === savedId) : data[0];
         const m = match || data[0];
         set({
           activeCondoCorp: { id: m.id, name: m.name, address: m.address, status: m.status },
           activeRole: m.role as Role,
         });
+      } else if (!current && isPlatformAdmin) {
+        set({ activeRole: 'platform_admin' });
       }
     } catch {
-      set({ memberships: [] });
+      set({ memberships: [], isPlatformAdmin: false });
     }
   },
 }));

@@ -6,6 +6,7 @@ import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { hasCondoCorpAccess, hasCondoCorpAdminAccess } from '../access.js';
 import { getOpenAI } from '../openai.js';
 
 const router = Router();
@@ -90,11 +91,10 @@ router.get('/:condocorpId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     const result = await pool.query(
       'SELECT * FROM documents WHERE condocorp_id = $1 ORDER BY created_at DESC',
@@ -113,11 +113,10 @@ router.post('/:condocorpId', requireAuth, upload.single('file'), async (req, res
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     const file = req.file;
     if (!file) { res.status(400).json({ error: 'No file uploaded' }); return; }
@@ -144,11 +143,10 @@ router.post('/:condocorpId/:documentId/process', requireAuth, async (req, res) =
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId, documentId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     await pool.query(`UPDATE documents SET status = 'processing' WHERE id = $1`, [documentId]);
 
@@ -232,11 +230,10 @@ router.get('/:condocorpId/:documentId/chunks', requireAuth, async (req, res) => 
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId, documentId } = req.params;
 
-    const member = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (member.rows.length === 0) { res.status(403).json({ error: 'Access denied' }); return; }
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
     const result = await pool.query(
       `SELECT id, condocorp_id, document_id, chunk_number, chunk_text, created_at
@@ -257,11 +254,10 @@ router.delete('/:condocorpId/:documentId', requireAuth, async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const { condocorpId, documentId } = req.params;
 
-    const admin = await pool.query(
-      `SELECT 1 FROM condocorp_memberships WHERE user_id = $1 AND condocorp_id = $2 AND role IN ('condocorp_admin', 'platform_admin') AND status = 'active' LIMIT 1`,
-      [userId, condocorpId]
-    );
-    if (admin.rows.length === 0) { res.status(403).json({ error: 'Admin access required' }); return; }
+    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Admin access required' });
+      return;
+    }
 
     const docResult = await pool.query('SELECT file_path FROM documents WHERE id = $1 AND condocorp_id = $2', [documentId, condocorpId]);
     if (docResult.rows.length > 0) {

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { AuthGuard } from './components/auth/AuthGuard';
 import { AppLayout } from './components/layout/AppLayout';
@@ -12,6 +12,9 @@ import { FaqsPage } from './pages/FaqsPage';
 import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { PlatformAdminPage } from './pages/PlatformAdminPage';
+import { CondoCorpsPage } from './pages/CondoCorpsPage';
+import { HomeRedirect } from './components/layout/HomeRedirect';
+import { CondoCorpRequired } from './components/auth/CondoCorpRequired';
 
 export default function App() {
   const { initialize, initialized } = useAuthStore();
@@ -33,13 +36,14 @@ export default function App() {
             </AuthGuard>
           }
         >
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="chat" element={<ChatPage />} />
-          <Route path="documents" element={<DocumentsPage />} />
-          <Route path="faqs" element={<FaqsPage />} />
-          <Route path="users" element={<UsersPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route index element={<HomeRedirect />} />
+          <Route path="condocorps" element={<CondoCorpsPage />} />
+          <Route path="dashboard" element={<CondoCorpRequired><DashboardPage /></CondoCorpRequired>} />
+          <Route path="chat" element={<CondoCorpRequired><ChatPage /></CondoCorpRequired>} />
+          <Route path="documents" element={<CondoCorpRequired><DocumentsPage /></CondoCorpRequired>} />
+          <Route path="faqs" element={<CondoCorpRequired><FaqsPage /></CondoCorpRequired>} />
+          <Route path="users" element={<CondoCorpRequired><UsersPage /></CondoCorpRequired>} />
+          <Route path="settings" element={<CondoCorpRequired><SettingsPage /></CondoCorpRequired>} />
           <Route path="platform" element={<PlatformAdminPage />} />
         </Route>
       </Routes>
