@@ -67,7 +67,11 @@ app.use((req, res, next) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-async function start() {
+async function bootstrapDatabase() {
+  if (!process.env.DATABASE_URL) {
+    console.error('DATABASE_URL is not set — API routes needing the database will fail');
+    return;
+  }
   await runMigrations();
   const client = await pool.connect();
   try {
@@ -76,9 +80,13 @@ async function start() {
   } finally {
     client.release();
   }
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running on port ${port}`);
-  });
+  console.log('Database ready');
 }
 
-start().catch(console.error);
+// Listen immediately so Railway healthchecks pass; migrations run after bind.
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server running on port ${port}`);
+  bootstrapDatabase().catch((err) => {
+    console.error('Database bootstrap failed:', err);
+  });
+});
