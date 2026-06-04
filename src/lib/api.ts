@@ -1,7 +1,28 @@
 const API_URL = import.meta.env.VITE_API_URL ?? '';
 
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 function getToken(): string | null {
   return localStorage.getItem('token');
+}
+
+export function setAuthToken(token: string | undefined | null): void {
+  if (!token || token === 'undefined' || token === 'null') {
+    throw new Error('Sign-in did not return a session token');
+  }
+  localStorage.setItem('token', token);
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem('token');
+  localStorage.removeItem('authUser');
 }
 
 function authHeaders(): Record<string, string> {
@@ -18,7 +39,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error ?? `Request failed: ${res.status}`);
+    throw new ApiError(res.status, body.error ?? `Request failed: ${res.status}`);
   }
   return res.json();
 }
@@ -37,6 +58,11 @@ export const auth = {
     }),
   me: () =>
     request<{ id: string; email: string; first_name: string; last_name: string }>('/api/auth/me'),
+  google: (credential: string, invite_email?: string) =>
+    request<{ token: string; user: { id: string; email: string; first_name: string; last_name: string } }>('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential, invite_email }),
+    }),
   requestAccess: (data: {
     condocorp_name: string;
     condocorp_address: string;
@@ -191,8 +217,91 @@ export const chat = {
   messages: (conversationId: string) =>
     request<Array<{ id: string; role: string; content: string; sources: unknown; created_at: string }>>(`/api/chat/conversations/${conversationId}/messages`),
   ask: (condocorpId: string, conversationId: string, question: string) =>
-    request<{ answer: string; sources: Array<{ document_title: string; chunk_text: string; chunk_number: number; similarity: number }>; message_id: string }>(`/api/chat/${condocorpId}/ask`, {
+    request<{
+      answer: string;
+      sources: Array<{ document_title: string; chunk_text: string; chunk_number: number; similarity: number }>;
+      message_id: string;
+      cannot_answer?: boolean;
+    }>(`/api/chat/${condocorpId}/ask`, {
       method: 'POST',
       body: JSON.stringify({ conversation_id: conversationId, question }),
     }),
 };
+
+// Support tickets
+export const tickets = {
+  list: (condocorpId: string) =>
+    request<Array<SupportTicketRow>>(`/api/tickets/${condocorpId}`),
+  get: (condocorpId: string, ticketId: string) =>
+    request<{ ticket: SupportTicketRow; replies: SupportTicketReply[] }>(
+      `/api/tickets/${condocorpId}/${ticketId}`
+    ),
+  create: (
+    condocorpId: string,
+    data: { subject: string; question: string; conversation_id?: string; message_id?: string }
+  ) =>
+    request<SupportTicketRow>(`/api/tickets/${condocorpId}`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  reply: (condocorpId: string, ticketId: string, content: string) =>
+    request(`/api/tickets/${condocorpId}/${ticketId}/replies`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  update: (
+    condocorpId: string,
+    ticketId: string,
+    data: { status?: string; assigned_to?: string | null }
+  ) =>
+    request<SupportTicketRow>(`/api/tickets/${condocorpId}/${ticketId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  close: (
+    condocorpId: string,
+    ticketId: string,
+    data?: { add_to_knowledge?: boolean; kb_question?: string; kb_answer?: string }
+  ) =>
+    request<{
+      ticket: SupportTicketRow;
+      knowledge?: { faqId: string; documentId: string; chunksCreated: number };
+      prompt_add_to_knowledge?: boolean;
+    }>(`/api/tickets/${condocorpId}/${ticketId}/close`, {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+};
+
+export interface SupportTicketRow {
+  id: string;
+  condocorp_id: string;
+  created_by: string;
+  assigned_to: string | null;
+  status: 'open' | 'in_progress' | 'closed';
+  subject: string;
+  question: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  knowledge_added: boolean;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  creator_email?: string;
+  creator_first_name?: string;
+  creator_last_name?: string;
+  assignee_email?: string | null;
+  assignee_first_name?: string | null;
+  assignee_last_name?: string | null;
+}
+
+export interface SupportTicketReply {
+  id: string;
+  ticket_id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+}

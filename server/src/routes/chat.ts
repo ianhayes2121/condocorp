@@ -3,7 +3,12 @@ import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
 import { hasCondoCorpAccess } from '../access.js';
 import { getOpenAI } from '../openai.js';
-import { buildSystemPrompt, getLlmPromptTemplate } from '../llm-prompt.js';
+import {
+  buildSystemPrompt,
+  getLlmPromptTemplate,
+  normalizeCannotAnswerResponse,
+  isCannotAnswerResponse,
+} from '../llm-prompt.js';
 
 const router = Router();
 
@@ -165,9 +170,12 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       max_tokens: 1024,
     });
 
-    const answer = completion.choices[0].message.content ?? '';
+    let answer = completion.choices[0].message.content ?? '';
+    const hasRelevantContext = chunks.length > 0;
+    answer = normalizeCannotAnswerResponse(answer, hasRelevantContext);
+    const cannotAnswer = !hasRelevantContext || isCannotAnswerResponse(answer);
 
-    const sources = chunks.map(c => ({
+    const sources = cannotAnswer ? [] : chunks.map(c => ({
       document_title: docTitleMap.get(c.document_id) ?? 'Unknown',
       chunk_text: c.chunk_text.substring(0, 200),
       chunk_number: c.chunk_number,
@@ -186,7 +194,12 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       [condocorpId, userId, JSON.stringify({ question, sources_count: sources.length })]
     );
 
-    res.json({ answer, sources, message_id: msgResult.rows[0].id });
+    res.json({
+      answer,
+      sources,
+      message_id: msgResult.rows[0].id,
+      cannot_answer: cannotAnswer,
+    });
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Internal error' });

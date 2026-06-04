@@ -8,6 +8,9 @@ const statusColors: Record<string, string> = {
   chunked: 'bg-purple-100 text-purple-700',
   indexed: 'bg-green-100 text-green-700',
   failed: 'bg-red-100 text-red-700',
+  open: 'bg-blue-100 text-blue-700',
+  in_progress: 'bg-yellow-100 text-yellow-700',
+  closed: 'bg-gray-100 text-gray-600',
 };
 
 export function StatusBadge({ status }: { status: string }) {

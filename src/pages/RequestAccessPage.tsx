@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Building2, ArrowLeft } from 'lucide-react';
-import { auth } from '../lib/api';
+import { auth, setAuthToken } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
 
 export function RequestAccessPage() {
@@ -35,7 +35,7 @@ export function RequestAccessPage() {
 
     try {
       const { token } = await auth.requestAccess(form);
-      localStorage.setItem('token', token);
+      setAuthToken(token);
       await initialize();
       navigate('/dashboard');
     } catch (err) {

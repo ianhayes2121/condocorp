@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Send, Plus, Copy, Check, FileText, MessageSquare } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAuthStore } from '../stores/authStore';
-import { chat, questionPresets } from '../lib/api';
+import { chat, questionPresets, tickets } from '../lib/api';
 import type { SourceCitation } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -18,6 +18,9 @@ interface MessageItem {
   sources?: SourceCitation[];
   created_at: string;
 }
+
+const CANNOT_ANSWER_MESSAGE =
+  "I don't have that information. Would you like me to create a support ticket?";
 
 const FALLBACK_SUGGESTED_QUESTIONS = [
   'What are the pet policies in our building?',
@@ -38,6 +41,9 @@ export function ChatPage() {
   const [sending, setSending] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [pendingTicket, setPendingTicket] = useState<{ question: string; messageId?: string } | null>(null);
+  const [creatingTicket, setCreatingTicket] = useState(false);
+  const [ticketCreated, setTicketCreated] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -80,6 +86,8 @@ export function ChatPage() {
 
     setSending(true);
     setInput('');
+    setPendingTicket(null);
+    setTicketCreated(false);
 
     let convo = activeConversation;
     if (!convo) {
@@ -106,6 +114,10 @@ export function ChatPage() {
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, assistantMsg]);
+
+      if (data.cannot_answer) {
+        setPendingTicket({ question: content, messageId: data.message_id });
+      }
     } catch {
       const errorMsg: MessageItem = {
         id: crypto.randomUUID(),
@@ -116,6 +128,37 @@ export function ChatPage() {
       setMessages(prev => [...prev, errorMsg]);
     } finally {
       setSending(false);
+    }
+  };
+
+  const createSupportTicket = async () => {
+    if (!activeCondoCorp || !pendingTicket || creatingTicket) return;
+    setCreatingTicket(true);
+    try {
+      const subject =
+        pendingTicket.question.length > 80
+          ? `${pendingTicket.question.slice(0, 77)}…`
+          : pendingTicket.question;
+      await tickets.create(activeCondoCorp.id, {
+        subject,
+        question: pendingTicket.question,
+        conversation_id: activeConversation?.id,
+        message_id: pendingTicket.messageId,
+      });
+      setTicketCreated(true);
+      setPendingTicket(null);
+    } catch {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: 'Sorry, we could not create your support ticket. Please try again or contact your condo admin.',
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setCreatingTicket(false);
     }
   };
 
@@ -226,6 +269,26 @@ export function ChatPage() {
                   </div>
                 )}
 
+                {msg.role === 'assistant' &&
+                  msg.content.includes(CANNOT_ANSWER_MESSAGE) &&
+                  pendingTicket?.messageId === msg.id && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-2">
+                    <button
+                      onClick={createSupportTicket}
+                      disabled={creatingTicket}
+                      className="px-3 py-1.5 text-xs font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {creatingTicket ? 'Creating…' : 'Yes, create a ticket'}
+                    </button>
+                    <button
+                      onClick={() => setPendingTicket(null)}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200"
+                    >
+                      No thanks
+                    </button>
+                  </div>
+                )}
+
                 {msg.role === 'assistant' && (
                   <div className="mt-2 flex justify-end">
                     <button
@@ -239,6 +302,15 @@ export function ChatPage() {
               </div>
             </div>
           ))}
+
+          {ticketCreated && (
+            <div className="flex justify-center">
+              <p className="text-sm text-green-700 bg-green-50 px-4 py-2 rounded-lg">
+                Support ticket created. Your condo admin has been notified.{' '}
+                <a href="/tickets" className="font-medium underline">View tickets</a>
+              </p>
+            </div>
+          )}
 
           {sending && (
             <div className="flex justify-start">

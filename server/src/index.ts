@@ -14,6 +14,7 @@ import chatRouter from './routes/chat.js';
 import invitationsRouter from './routes/invitations.js';
 import questionPresetsRouter from './routes/question-presets.js';
 import platformLlmPromptRouter from './routes/platform-llm-prompt.js';
+import ticketsRouter from './routes/tickets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +56,7 @@ app.use('/api/chat', chatRouter);
 app.use('/api/invitations', invitationsRouter);
 app.use('/api/question-presets', questionPresetsRouter);
 app.use('/api/platform/llm-prompt', platformLlmPromptRouter);
+app.use('/api/tickets', ticketsRouter);
 
 // Serve static frontend in production
 const distPath = path.resolve(__dirname, '../../dist');

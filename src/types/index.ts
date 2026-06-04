@@ -109,6 +109,22 @@ export interface SourceCitation {
   similarity: number;
 }
 
+export type TicketStatus = 'open' | 'in_progress' | 'closed';
+
+export interface SupportTicket {
+  id: string;
+  condocorp_id: string;
+  created_by: string;
+  assigned_to: string | null;
+  status: TicketStatus;
+  subject: string;
+  question: string;
+  knowledge_added: boolean;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+}
+
 export interface AuditLog {
   id: string;
   condocorp_id: string;

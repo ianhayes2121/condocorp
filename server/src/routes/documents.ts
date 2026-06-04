@@ -172,8 +172,8 @@ router.post('/:condocorpId/:documentId/process', requireAuth, async (req, res) =
     } else if (ext === 'html' || ext === 'htm') {
       rawText = extractTextFromHtml(fs.readFileSync(filePath, 'utf-8'));
     } else if (ext === 'pdf') {
-      const buffer = fs.readFileSync(filePath);
-      const parser = new PDFParse(buffer);
+      const fileBytes = new Uint8Array(fs.readFileSync(filePath));
+      const parser = new PDFParse(fileBytes);
       const pdfData = await parser.getText();
       rawText = pdfData.text;
     } else if (ext === 'docx') {

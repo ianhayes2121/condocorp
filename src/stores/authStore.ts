@@ -1,6 +1,22 @@
 import { create } from 'zustand';
-import { auth, condocorps } from '../lib/api';
+import { ApiError, auth, clearAuthToken, condocorps, setAuthToken } from '../lib/api';
 import type { Role } from '../types';
+
+const AUTH_USER_KEY = 'authUser';
+
+function cacheUser(profile: Profile): void {
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(profile));
+}
+
+function readCachedUser(): Profile | null {
+  const raw = localStorage.getItem(AUTH_USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Profile;
+  } catch {
+    return null;
+  }
+}
 
 interface Profile {
   id: string;
@@ -39,6 +55,8 @@ interface AuthState {
   initialized: boolean;
   initialize: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, first_name: string, last_name: string) => Promise<void>;
+  signInWithGoogle: (credential: string, invite_email?: string) => Promise<void>;
   signOut: () => void;
   setActiveCondoCorp: (condocorp: ActiveCondoCorp, role: Role) => void;
   enterCondoCorpAsAdmin: (condocorp: ActiveCondoCorp) => void;
@@ -66,30 +84,57 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   initialize: async () => {
     const token = localStorage.getItem('token');
-    if (!token) {
+    if (!token || token === 'undefined' || token === 'null') {
+      if (token) clearAuthToken();
       set({ loading: false, initialized: true });
       return;
+    }
+
+    const cachedProfile = readCachedUser();
+    if (cachedProfile) {
+      set({ profile: cachedProfile });
     }
 
     try {
       const profile = await auth.me();
       set({ profile });
+      cacheUser(profile);
       await get().loadMemberships();
-    } catch {
-      localStorage.removeItem('token');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        clearAuthToken();
+        set({ profile: null, memberships: [], activeCondoCorp: null, activeRole: null, isPlatformAdmin: false, viewingAsCondoAdmin: false });
+      }
     }
     set({ loading: false, initialized: true });
   },
 
   signIn: async (email, password) => {
     const { token, user } = await auth.login(email, password);
-    localStorage.setItem('token', token);
+    setAuthToken(token);
     set({ profile: user });
+    cacheUser(user);
+    await get().loadMemberships();
+  },
+
+  signUp: async (email, password, first_name, last_name) => {
+    const { token, user } = await auth.signup(email, password, first_name, last_name);
+    setAuthToken(token);
+    set({ profile: user });
+    cacheUser(user);
+    await get().loadMemberships();
+  },
+
+  signInWithGoogle: async (credential, invite_email) => {
+    const { token, user } = await auth.google(credential, invite_email);
+    setAuthToken(token);
+    set({ profile: user });
+    cacheUser(user);
     await get().loadMemberships();
   },
 
   signOut: () => {
-    localStorage.removeItem('token');
+    clearAuthToken();
     localStorage.removeItem('activeCondoCorpId');
     localStorage.removeItem('viewingAsCondoAdmin');
     set({

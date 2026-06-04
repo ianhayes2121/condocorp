@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
+import { InviteError, inviteUserToCondoCorp, isValidInviteRole } from '../invite-user.js';
 
 const router = Router();
 
@@ -14,13 +15,11 @@ router.post('/', requireAuth, async (req, res) => {
       return;
     }
 
-    const validRoles = ['condocorp_admin', 'board_member', 'homeowner', 'property_manager'];
-    if (!validRoles.includes(role)) {
+    if (!isValidInviteRole(role)) {
       res.status(400).json({ error: 'Invalid role' });
       return;
     }
 
-    // Check caller is admin of this condocorp or platform admin
     const admin = await pool.query(
       `SELECT role FROM condocorp_memberships
        WHERE user_id = $1 AND status = 'active'
@@ -34,66 +33,26 @@ router.post('/', requireAuth, async (req, res) => {
       return;
     }
 
-    // Check if user already has an active membership
-    const existingMembership = await pool.query(
-      `SELECT 1 FROM condocorp_memberships m
-       JOIN users u ON u.id = m.user_id
-       WHERE u.email = $1 AND m.condocorp_id = $2 AND m.status = 'active'
-       LIMIT 1`,
-      [email, condocorp_id]
-    );
-    if (existingMembership.rows.length > 0) {
-      res.status(409).json({ error: 'User is already a member of this CondoCorp' });
-      return;
-    }
+    const result = await inviteUserToCondoCorp({
+      condocorpId: condocorp_id,
+      email,
+      role,
+      invitedByUserId: userId,
+    });
 
-    // Check if there's already a pending invitation
-    const existingInvite = await pool.query(
-      `SELECT 1 FROM invitations
-       WHERE email = $1 AND condocorp_id = $2 AND status = 'pending' AND expires_at > now()
-       LIMIT 1`,
-      [email, condocorp_id]
-    );
-    if (existingInvite.rows.length > 0) {
-      res.status(409).json({ error: 'A pending invitation already exists for this email' });
-      return;
-    }
-
-    // Check if user already exists in the system
-    const existingUser = await pool.query(
-      'SELECT id FROM users WHERE email = $1',
-      [email]
-    );
-
-    // Create the invitation record
-    await pool.query(
-      `INSERT INTO invitations (condocorp_id, email, role, invited_by)
-       VALUES ($1, $2, $3, $4)`,
-      [condocorp_id, email, role, userId]
-    );
-
-    if (existingUser.rows.length > 0) {
-      // User already exists — create membership directly
-      await pool.query(
-        `INSERT INTO condocorp_memberships (condocorp_id, user_id, role, status)
-         VALUES ($1, $2, $3, 'active')
-         ON CONFLICT (condocorp_id, user_id) DO UPDATE SET role = $3, status = 'active'`,
-        [condocorp_id, existingUser.rows[0].id, role]
-      );
-
-      // Mark invitation as accepted
-      await pool.query(
-        `UPDATE invitations SET status = 'accepted'
-         WHERE email = $1 AND condocorp_id = $2 AND status = 'pending'`,
-        [email, condocorp_id]
-      );
-
+    if (result.existing_user) {
       res.status(201).json({ message: 'User added to CondoCorp', existing_user: true });
     } else {
-      // New user — invitation saved, they'll be added when they sign up
-      res.status(201).json({ message: 'Invitation created. User will be added when they create an account.', existing_user: false });
+      res.status(201).json({
+        message: 'Invitation email sent. User will be added when they create an account.',
+        existing_user: false,
+      });
     }
   } catch (error) {
+    if (error instanceof InviteError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
     console.error('Invite error:', error);
     res.status(500).json({ error: 'Failed to create invitation' });
   }

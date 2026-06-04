@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
 import { hasCondoCorpAccess, hasCondoCorpAdminAccess } from '../access.js';
+import { InviteError, inviteUserToCondoCorp, isValidInviteRole } from '../invite-user.js';
 
 const router = Router();
 
@@ -21,7 +22,7 @@ router.get('/:condocorpId', requireAuth, async (req, res) => {
               u.id as user_id, u.email, u.first_name, u.last_name
        FROM condocorp_memberships m
        JOIN users u ON u.id = m.user_id
-       WHERE m.condocorp_id = $1
+       WHERE m.condocorp_id = $1 AND m.role != 'platform_admin'
        ORDER BY m.created_at DESC`,
       [condocorpId]
     );
@@ -49,65 +50,32 @@ router.post('/:condocorpId', requireAuth, async (req, res) => {
       return;
     }
 
-    const validRoles = ['condocorp_admin', 'board_member', 'homeowner', 'property_manager'];
-    if (!validRoles.includes(role)) {
+    if (!isValidInviteRole(role)) {
       res.status(400).json({ error: 'Invalid role' });
       return;
     }
 
-    // Check if already an active member
-    const existingMember = await pool.query(
-      `SELECT 1 FROM condocorp_memberships m
-       JOIN users u ON u.id = m.user_id
-       WHERE u.email = $1 AND m.condocorp_id = $2 AND m.status = 'active'
-       LIMIT 1`,
-      [email, condocorpId]
-    );
-    if (existingMember.rows.length > 0) {
-      res.status(409).json({ error: 'User is already a member of this CondoCorp.' });
-      return;
-    }
+    const result = await inviteUserToCondoCorp({
+      condocorpId,
+      email,
+      role,
+      invitedByUserId: userId,
+    });
 
-    // Check for existing pending invitation
-    const existingInvite = await pool.query(
-      `SELECT 1 FROM invitations
-       WHERE email = $1 AND condocorp_id = $2 AND status = 'pending' AND expires_at > now()
-       LIMIT 1`,
-      [email, condocorpId]
-    );
-    if (existingInvite.rows.length > 0) {
-      res.status(409).json({ error: 'A pending invitation already exists for this email.' });
-      return;
-    }
-
-    const userResult = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-
-    // Create invitation record
-    await pool.query(
-      `INSERT INTO invitations (condocorp_id, email, role, invited_by)
-       VALUES ($1, $2, $3, $4)`,
-      [condocorpId, email, role, userId]
-    );
-
-    if (userResult.rows.length > 0) {
-      // Existing user — add membership directly
-      await pool.query(
-        `INSERT INTO condocorp_memberships (condocorp_id, user_id, role, status)
-         VALUES ($1, $2, $3, 'active')
-         ON CONFLICT (condocorp_id, user_id) DO UPDATE SET role = $3, status = 'active'`,
-        [condocorpId, userResult.rows[0].id, role]
-      );
-      await pool.query(
-        `UPDATE invitations SET status = 'accepted'
-         WHERE email = $1 AND condocorp_id = $2 AND status = 'pending'`,
-        [email, condocorpId]
-      );
+    if (result.existing_user) {
       res.status(201).json({ success: true, invited: false, message: 'User added to CondoCorp' });
     } else {
-      // New user — invitation saved, they'll be added when they sign up
-      res.status(201).json({ success: true, invited: true, message: 'Invitation created. User will be added when they create an account.' });
+      res.status(201).json({
+        success: true,
+        invited: true,
+        message: 'Invitation email sent. They can create an account using the link in the email.',
+      });
     }
   } catch (error) {
+    if (error instanceof InviteError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
     console.error('Invite error:', error);
     res.status(500).json({ error: 'Failed to invite user' });
   }
@@ -124,10 +92,16 @@ router.patch('/:condocorpId/:membershipId', requireAuth, async (req, res) => {
       return;
     }
 
-    await pool.query(
-      `UPDATE condocorp_memberships SET status = 'inactive' WHERE id = $1 AND condocorp_id = $2`,
+    const result = await pool.query(
+      `UPDATE condocorp_memberships SET status = 'inactive'
+       WHERE id = $1 AND condocorp_id = $2 AND role != 'platform_admin'
+       RETURNING id`,
       [membershipId, condocorpId]
     );
+    if (result.rowCount === 0) {
+      res.status(404).json({ error: 'Member not found' });
+      return;
+    }
     res.json({ success: true });
   } catch (error) {
     console.error('Remove member error:', error);
