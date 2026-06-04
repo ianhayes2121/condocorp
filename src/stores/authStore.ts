@@ -87,7 +87,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   loadMemberships: async () => {
     try {
       const data = await condocorps.list();
-      set({ memberships: data });
+      set({ memberships: data as Membership[] });
 
       const savedId = localStorage.getItem('activeCondoCorpId');
       const current = get().activeCondoCorp;

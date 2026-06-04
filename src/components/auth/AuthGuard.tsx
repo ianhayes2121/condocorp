@@ -2,7 +2,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading, initialized } = useAuthStore();
+  const { profile, loading, initialized } = useAuthStore();
 
   if (!initialized || loading) {
     return (
@@ -12,7 +12,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user) {
+  if (!profile) {
     return <Navigate to="/login" replace />;
   }
 
