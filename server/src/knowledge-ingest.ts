@@ -1,27 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import type { Pool } from 'pg';
+import { chunkText } from './document-text.js';
 import { getOpenAI } from './openai.js';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? './uploads';
-
-function chunkText(text: string, targetSize = 1000, overlap = 200): string[] {
-  const chunks: string[] = [];
-  const paragraphs = text.split(/\n\n+/);
-  let current = '';
-
-  for (const para of paragraphs) {
-    if (current.length + para.length + 1 > targetSize && current.length > 0) {
-      chunks.push(current.trim());
-      const overlapText = current.slice(-overlap);
-      current = overlapText + '\n\n' + para;
-    } else {
-      current += (current ? '\n\n' : '') + para;
-    }
-  }
-  if (current.trim()) chunks.push(current.trim());
-  return chunks.length > 0 ? chunks : [text.trim()];
-}
 
 async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const batchSize = 20;
@@ -71,7 +54,7 @@ export async function ingestTicketToKnowledgeBase(
   );
   const documentId = docResult.rows[0].id as string;
 
-  const textChunks = chunkText(knowledgeText);
+  const textChunks = chunkText(knowledgeText, 1000, 200, 15);
   const embeddings = await generateEmbeddings(textChunks);
 
   for (let i = 0; i < textChunks.length; i++) {

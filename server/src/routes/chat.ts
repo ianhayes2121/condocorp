@@ -9,6 +9,12 @@ import {
   normalizeCannotAnswerResponse,
   isCannotAnswerResponse,
 } from '../llm-prompt.js';
+import { RAG_TOP_K, hasRetrievalContext } from '../rag.js';
+import {
+  buildRetrievalQuery,
+  looksLikeFollowUp,
+  toLlmHistoryMessages,
+} from '../conversation-rag.js';
 
 const router = Router();
 
@@ -96,34 +102,53 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       return;
     }
 
+    const convoCheck = await pool.query(
+      'SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2',
+      [conversation_id, userId]
+    );
+    if (convoCheck.rows.length === 0) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    const historyResult = await pool.query(
+      `SELECT role, content FROM messages
+       WHERE conversation_id = $1
+       ORDER BY created_at ASC`,
+      [conversation_id]
+    );
+    const priorMessages = historyResult.rows as Array<{ role: string; content: string }>;
+
+    const embedQuestion = looksLikeFollowUp(question, priorMessages)
+      ? buildRetrievalQuery(question, priorMessages)
+      : question;
+
+    async function searchChunks(searchText: string) {
+      const embeddingResponse = await getOpenAI().embeddings.create({
+        model: 'text-embedding-3-small',
+        input: searchText,
+      });
+      const embeddingStr = `[${embeddingResponse.data[0].embedding.join(',')}]`;
+      return pool.query(
+        `SELECT dc.id, dc.document_id, dc.chunk_number, dc.chunk_text,
+                1 - (dc.embedding <=> $1::vector) as similarity
+         FROM document_chunks dc
+         WHERE dc.condocorp_id = $2
+           AND dc.embedding IS NOT NULL
+         ORDER BY dc.embedding <=> $1::vector
+         LIMIT $3`,
+        [embeddingStr, condocorpId, RAG_TOP_K]
+      );
+    }
+
+    let chunksResult = await searchChunks(embedQuestion);
+    let chunks = chunksResult.rows;
+
     // Store user message
     await pool.query(
       'INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)',
       [conversation_id, 'user', question]
     );
-
-    // Generate embedding for the question
-    const embeddingResponse = await getOpenAI().embeddings.create({
-      model: 'text-embedding-3-small',
-      input: question,
-    });
-    const questionEmbedding = embeddingResponse.data[0].embedding;
-    const embeddingStr = `[${questionEmbedding.join(',')}]`;
-
-    // Vector search — filtered by condocorp_id BEFORE ranking
-    const chunksResult = await pool.query(
-      `SELECT dc.id, dc.document_id, dc.chunk_number, dc.chunk_text,
-              1 - (dc.embedding <=> $1::vector) as similarity
-       FROM document_chunks dc
-       WHERE dc.condocorp_id = $2
-         AND dc.embedding IS NOT NULL
-         AND 1 - (dc.embedding <=> $1::vector) > 0.5
-       ORDER BY dc.embedding <=> $1::vector
-       LIMIT 5`,
-      [embeddingStr, condocorpId]
-    );
-
-    const chunks = chunksResult.rows;
 
     // Get document titles for citations
     const docIds = [...new Set(chunks.map(c => c.document_id))];
@@ -142,12 +167,38 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       [condocorpId]
     );
 
+    let topSimilarity = chunks[0]?.similarity != null ? Number(chunks[0].similarity) : null;
+    let hasRelevantContext = hasRetrievalContext(topSimilarity, faqsResult.rows.length);
+
+    if (!hasRelevantContext && priorMessages.length > 0 && embedQuestion === question) {
+      const expandedQuery = buildRetrievalQuery(question, priorMessages);
+      if (expandedQuery !== question) {
+        chunksResult = await searchChunks(expandedQuery);
+        chunks = chunksResult.rows;
+        topSimilarity = chunks[0]?.similarity != null ? Number(chunks[0].similarity) : null;
+        hasRelevantContext = hasRetrievalContext(topSimilarity, faqsResult.rows.length);
+
+        const retryDocIds = [...new Set(chunks.map(c => c.document_id))].filter(id => !docTitleMap.has(id));
+        if (retryDocIds.length > 0) {
+          const docsResult = await pool.query(
+            'SELECT id, title FROM documents WHERE id = ANY($1)',
+            [retryDocIds]
+          );
+          for (const d of docsResult.rows) docTitleMap.set(d.id, d.title);
+        }
+      }
+    }
+    const contextChunks = hasRelevantContext ? chunks : [];
+
     // Build context
-    const chunkContext = chunks
-      .map((c, i) =>
-        `[Source ${i + 1}: ${docTitleMap.get(c.document_id) ?? 'Unknown'}, Chunk ${c.chunk_number}]\n${c.chunk_text}`
-      )
-      .join('\n\n');
+    const chunkContext =
+      contextChunks.length > 0
+        ? contextChunks
+            .map((c, i) =>
+              `[Source ${i + 1}: ${docTitleMap.get(c.document_id) ?? 'Unknown'}, Chunk ${c.chunk_number}]\n${c.chunk_text}`
+            )
+            .join('\n\n')
+        : '(No matching document excerpts were retrieved for this question.)';
 
     const faqContext = faqsResult.rows
       .map(f => `Q: ${f.question}\nA: ${f.answer}`)
@@ -158,24 +209,26 @@ router.post('/:condocorpId/ask', requireAuth, async (req, res) => {
       .join('');
 
     const promptTemplate = await getLlmPromptTemplate(pool);
-    const systemPrompt = buildSystemPrompt(promptTemplate, contextBlock);
+    const systemPrompt = buildSystemPrompt(promptTemplate, contextBlock, question);
+
+    const historyForLlm = toLlmHistoryMessages(priorMessages);
 
     const completion = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: systemPrompt },
+        ...historyForLlm,
         { role: 'user', content: question },
       ],
-      temperature: 0.3,
-      max_tokens: 1024,
+      temperature: 0.45,
+      max_tokens: 1536,
     });
 
     let answer = completion.choices[0].message.content ?? '';
-    const hasRelevantContext = chunks.length > 0;
-    answer = normalizeCannotAnswerResponse(answer, hasRelevantContext);
-    const cannotAnswer = !hasRelevantContext || isCannotAnswerResponse(answer);
+    answer = normalizeCannotAnswerResponse(answer);
+    const cannotAnswer = isCannotAnswerResponse(answer);
 
-    const sources = cannotAnswer ? [] : chunks.map(c => ({
+    const sources = cannotAnswer ? [] : contextChunks.map(c => ({
       document_title: docTitleMap.get(c.document_id) ?? 'Unknown',
       chunk_text: c.chunk_text.substring(0, 200),
       chunk_number: c.chunk_number,

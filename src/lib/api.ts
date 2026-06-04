@@ -39,7 +39,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new ApiError(res.status, body.error ?? `Request failed: ${res.status}`);
+    throw new ApiError(res.status, body.error ?? body.failure_reason ?? `Request failed: ${res.status}`);
   }
   return res.json();
 }
@@ -62,6 +62,16 @@ export const auth = {
     request<{ token: string; user: { id: string; email: string; first_name: string; last_name: string } }>('/api/auth/google', {
       method: 'POST',
       body: JSON.stringify({ credential, invite_email }),
+    }),
+  forgotPassword: (email: string) =>
+    request<{ message: string }>('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (token: string, password: string) =>
+    request<{ message: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
     }),
   requestAccess: (data: {
     condocorp_name: string;
@@ -110,7 +120,7 @@ export const members = {
 // Documents
 export const documents = {
   list: (condocorpId: string) =>
-    request<Array<{ id: string; condocorp_id: string; title: string; filename: string; file_path: string; document_type: string; status: string; uploaded_by: string; created_at: string }>>(`/api/documents/${condocorpId}`),
+    request<Array<{ id: string; condocorp_id: string; title: string; filename: string; file_path: string; document_type: string; status: string; failure_reason: string | null; uploaded_by: string; created_at: string }>>(`/api/documents/${condocorpId}`),
   upload: async (condocorpId: string, file: File, title: string, documentType: string) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -124,12 +134,23 @@ export const documents = {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.error ?? 'Upload failed');
+      throw new ApiError(res.status, body.error ?? body.failure_reason ?? 'Upload failed');
     }
     return res.json();
   },
   process: (condocorpId: string, documentId: string) =>
     request(`/api/documents/${condocorpId}/${documentId}/process`, { method: 'POST' }),
+  file: async (condocorpId: string, documentId: string): Promise<Blob> => {
+    const token = getToken();
+    const res = await fetch(`${API_URL}/api/documents/${condocorpId}/${documentId}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }));
+      throw new ApiError(res.status, body.error ?? 'Failed to load document');
+    }
+    return res.blob();
+  },
   chunks: (condocorpId: string, documentId: string) =>
     request<Array<{ id: string; chunk_number: number; chunk_text: string; created_at: string }>>(`/api/documents/${condocorpId}/${documentId}/chunks`),
   delete: (condocorpId: string, documentId: string) =>
@@ -163,6 +184,7 @@ export const platformLlmPrompt = {
       template: string;
       default_template: string;
       context_placeholder: string;
+      question_placeholder: string;
       updated_at: string | null;
     }>('/api/platform/llm-prompt'),
   update: (template: string) =>
@@ -170,6 +192,7 @@ export const platformLlmPrompt = {
       template: string;
       default_template: string;
       context_placeholder: string;
+      question_placeholder: string;
       updated_at: string;
     }>('/api/platform/llm-prompt', {
       method: 'PUT',

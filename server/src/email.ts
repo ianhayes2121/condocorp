@@ -71,6 +71,49 @@ export async function sendAddedToCorpEmail(params: {
   }
 }
 
+export async function sendPasswordResetEmail(params: { to: string; resetToken: string }): Promise<void> {
+  const resetUrl = `${frontendUrl}/reset-password?token=${encodeURIComponent(params.resetToken)}`;
+
+  const { error } = await getResend().emails.send({
+    from: fromEmail,
+    to: params.to,
+    subject: 'Reset your CondoCorp password',
+    html: `
+      <p>Hi,</p>
+      <p>We received a request to reset the password for your CondoCorp account.</p>
+      <p><a href="${resetUrl}">Reset your password</a> — this link expires in 1 hour.</p>
+      <p>If you did not request this, you can ignore this email. Your password will not change.</p>
+      <p>If the link does not work, copy and paste this URL into your browser:</p>
+      <p><a href="${resetUrl}">${resetUrl}</a></p>
+      <p>— CondoCorp Knowledge Assistant</p>
+    `,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function sendGoogleSignInReminderEmail(params: { to: string }): Promise<void> {
+  const loginUrl = `${frontendUrl}/login?email=${encodeURIComponent(params.to)}`;
+
+  const { error } = await getResend().emails.send({
+    from: fromEmail,
+    to: params.to,
+    subject: 'Sign in to CondoCorp with Google',
+    html: `
+      <p>Hi,</p>
+      <p>We received a password reset request for this email address, but your account uses Google sign-in.</p>
+      <p><a href="${loginUrl}">Sign in with Google</a> instead of resetting a password.</p>
+      <p>— CondoCorp Knowledge Assistant</p>
+    `,
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 export async function sendTicketCreatedEmail(params: {
   to: string;
   condocorpName: string;

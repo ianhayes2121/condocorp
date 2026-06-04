@@ -6,6 +6,7 @@ export function LlmPromptEditor() {
   const [template, setTemplate] = useState('');
   const [defaultTemplate, setDefaultTemplate] = useState('');
   const [contextPlaceholder, setContextPlaceholder] = useState('{{context}}');
+  const [questionPlaceholder, setQuestionPlaceholder] = useState('{{question}}');
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -20,6 +21,7 @@ export function LlmPromptEditor() {
       setTemplate(data.template);
       setDefaultTemplate(data.default_template);
       setContextPlaceholder(data.context_placeholder);
+      setQuestionPlaceholder(data.question_placeholder ?? '{{question}}');
       setUpdatedAt(data.updated_at);
     } catch {
       setError('Failed to load LLM prompt');
@@ -38,6 +40,10 @@ export function LlmPromptEditor() {
     }
     if (!trimmed.includes(contextPlaceholder)) {
       setError(`Prompt must include ${contextPlaceholder} where documentation context is inserted`);
+      return;
+    }
+    if (!trimmed.includes(questionPlaceholder)) {
+      setError(`Prompt must include ${questionPlaceholder} where the user's question is inserted`);
       return;
     }
 
@@ -75,8 +81,9 @@ export function LlmPromptEditor() {
         <h3 className="font-semibold text-gray-900">LLM System Prompt</h3>
         <p className="text-sm text-gray-500 mt-1">
           Instructions sent to the AI for every Ask a Question response across all CondoCorps.
-          Include <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">{contextPlaceholder}</code> where
-          retrieved documentation and FAQs should be inserted.
+          Include <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">{contextPlaceholder}</code> for
+          retrieved documentation and FAQs, and <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">{questionPlaceholder}</code> for
+          the current user question.
         </p>
         {updatedAt && (
           <p className="text-xs text-gray-400 mt-2">
@@ -92,7 +99,7 @@ export function LlmPromptEditor() {
       <textarea
         value={template}
         onChange={e => setTemplate(e.target.value)}
-        rows={14}
+        rows={22}
         spellCheck={false}
         className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none resize-y"
       />

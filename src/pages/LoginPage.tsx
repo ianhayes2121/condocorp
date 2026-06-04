@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams, useLocation } from 'react-router-dom';
 import { Building2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { GoogleSignInButton } from '../components/auth/GoogleSignInButton';
@@ -8,7 +8,9 @@ const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '';
 
 export function LoginPage() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const prefilledEmail = searchParams.get('email')?.trim() ?? '';
+  const successMessage = (location.state as { message?: string } | null)?.message ?? '';
 
   const [email, setEmail] = useState(prefilledEmail);
   const [password, setPassword] = useState('');
@@ -56,6 +58,11 @@ export function LoginPage() {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+          {successMessage && (
+            <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+              {successMessage}
+            </div>
+          )}
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
               {error}
@@ -96,7 +103,15 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700">Password</label>
+                <Link
+                  to="/forgot-password"
+                  className="text-xs text-primary-600 hover:underline font-medium"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 type="password"
                 value={password}

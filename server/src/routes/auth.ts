@@ -3,7 +3,12 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { acceptPendingInvitations } from '../accept-invitations.js';
 import { isGoogleAuthConfigured, verifyGoogleIdToken } from '../google-auth.js';
+import { sendGoogleSignInReminderEmail, sendPasswordResetEmail } from '../email.js';
+import { createPasswordResetToken, consumePasswordResetToken } from '../password-reset.js';
 import { requireAuth, signToken, type AuthenticatedRequest } from '../middleware.js';
+
+const FORGOT_PASSWORD_MESSAGE =
+  'If an account exists for that email, you will receive password reset instructions shortly.';
 
 const router = Router();
 
@@ -191,6 +196,72 @@ router.post('/google', async (req, res) => {
       return;
     }
     res.status(401).json({ error: 'Google sign-in failed. Please try again.' });
+  }
+});
+
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!email) {
+      res.status(400).json({ error: 'Email is required' });
+      return;
+    }
+
+    const result = await pool.query(
+      'SELECT id, password_hash FROM users WHERE LOWER(email) = $1',
+      [email]
+    );
+
+    if (result.rows.length > 0) {
+      const user = result.rows[0] as { id: string; password_hash: string | null };
+      try {
+        if (user.password_hash) {
+          const token = await createPasswordResetToken(user.id);
+          await sendPasswordResetEmail({ to: email, resetToken: token });
+        } else {
+          await sendGoogleSignInReminderEmail({ to: email });
+        }
+      } catch (err) {
+        console.error('Forgot password email error:', err);
+        if (!process.env.RESEND_API_KEY) {
+          res.status(503).json({ error: 'Password reset email is not configured' });
+          return;
+        }
+      }
+    }
+
+    res.json({ message: FORGOT_PASSWORD_MESSAGE });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Failed to process request' });
+  }
+});
+
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, password } = req.body as { token?: string; password?: string };
+    if (!token || !password) {
+      res.status(400).json({ error: 'Token and new password are required' });
+      return;
+    }
+    if (password.length < 6) {
+      res.status(400).json({ error: 'Password must be at least 6 characters' });
+      return;
+    }
+
+    const consumed = await consumePasswordResetToken(token.trim());
+    if (!consumed) {
+      res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, consumed.userId]);
+
+    res.json({ message: 'Password updated. You can sign in with your new password.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Failed to reset password' });
   }
 });
 

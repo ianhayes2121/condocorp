@@ -1,9 +1,6 @@
-import type { Pool } from 'pg';
-
-export const CANNOT_ANSWER_MESSAGE =
-  "I don't have that information. Would you like me to create a support ticket?";
-
-export const DEFAULT_LLM_PROMPT_TEMPLATE = `You are CondoCorp Assistant — a friendly, clear guide who helps homeowners understand their condominium community.
+-- Discourage default "contact the board" deferrals (see server/src/llm-prompt.ts)
+UPDATE platform_llm_prompt
+SET template = $prompt$You are CondoCorp Assistant — a friendly, clear guide who helps homeowners understand their condominium community.
 
 Your primary source of truth is the CondoCorp documentation in the retrieved context below. It may include declarations, bylaws, rules, policies, FAQs, meeting minutes, and reserve fund studies.
 
@@ -21,53 +18,12 @@ How to answer:
 - Avoid boilerplate endings such as "check with your board," "contact management," or "verify with the property manager." Only mention the board when the documents explicitly require board approval for that situation, or the question is about a live dispute, fee waiver, or other matter only the board can decide.
 
 If the question is completely unrelated to condominium living, or you cannot offer any useful guidance even with general industry knowledge, respond with exactly:
-"${CANNOT_ANSWER_MESSAGE}"
+"I don't have that information. Would you like me to create a support ticket?"
 
 Retrieved Context:
 {{context}}
 
 User Question:
-{{question}}`;
-
-const LEGACY_CANNOT_ANSWER_PATTERNS = [
-  'could not find information about that',
-  'do not have that information',
-];
-
-export function isCannotAnswerResponse(answer: string): boolean {
-  const normalized = answer.trim().toLowerCase();
-  if (normalized.includes(CANNOT_ANSWER_MESSAGE.toLowerCase())) return true;
-  return LEGACY_CANNOT_ANSWER_PATTERNS.some(p => normalized.includes(p));
-}
-
-export function normalizeCannotAnswerResponse(answer: string): string {
-  const trimmed = answer.trim();
-  if (!trimmed || isCannotAnswerResponse(trimmed)) return CANNOT_ANSWER_MESSAGE;
-  return answer;
-}
-
-export const CONTEXT_PLACEHOLDER = '{{context}}';
-export const QUESTION_PLACEHOLDER = '{{question}}';
-
-export function buildSystemPrompt(
-  template: string,
-  contextBlock: string,
-  question: string
-): string {
-  return template
-    .split(CONTEXT_PLACEHOLDER)
-    .join(contextBlock)
-    .split(QUESTION_PLACEHOLDER)
-    .join(question);
-}
-
-export async function getLlmPromptTemplate(db: Pool): Promise<string> {
-  const result = await db.query(
-    'SELECT template FROM platform_llm_prompt WHERE id = $1',
-    ['default']
-  );
-  const template = result.rows[0]?.template;
-  return typeof template === 'string' && template.trim().length > 0
-    ? template
-    : DEFAULT_LLM_PROMPT_TEMPLATE;
-}
+{{question}}$prompt$,
+    updated_at = now()
+WHERE id = 'default';

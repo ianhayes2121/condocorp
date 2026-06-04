@@ -2,12 +2,28 @@ import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
-import { hasCondoCorpAccess, hasCondoCorpAdminAccess } from '../access.js';
+import { hasCondoCorpAccess } from '../access.js';
 import { getOpenAI } from '../openai.js';
+import {
+  assertMeaningfulDocumentText,
+  chunkText,
+  cleanText,
+  extractImageText,
+  extractPdfText,
+  extractTextFromHtml,
+  isImageExtension,
+} from '../document-text.js';
+import { isOcrEnabled } from '../ocr.js';
+import {
+  PROCESSING_ERRORS,
+  SUPPORTED_FORMATS_HELP,
+  contentTypeForFilename,
+  validateDocumentFilename,
+} from '../document-file-types.js';
+import { routeParam } from '../route-params.js';
 
 const router = Router();
 
@@ -21,57 +37,34 @@ const storage = multer.diskStorage({
     cb(null, uniqueName);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const validation = validateDocumentFilename(file.originalname);
+    if (!validation.ok) {
+      cb(new Error(validation.error));
+      return;
+    }
+    cb(null, true);
+  },
+});
 
-function cleanText(raw: string): string {
-  return raw
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+async function markDocumentFailed(documentId: string, reason: string): Promise<void> {
+  await pool.query(
+    `UPDATE documents SET status = 'failed', failure_reason = $2 WHERE id = $1`,
+    [documentId, reason]
+  );
 }
 
-function chunkText(text: string, targetSize = 1000, overlap = 200): string[] {
-  const chunks: string[] = [];
-  const paragraphs = text.split(/\n\n+/);
-  let current = '';
-
-  for (const para of paragraphs) {
-    if (current.length + para.length + 1 > targetSize && current.length > 0) {
-      chunks.push(current.trim());
-      const overlapText = current.slice(-overlap);
-      current = overlapText + '\n\n' + para;
-    } else {
-      current += (current ? '\n\n' : '') + para;
-    }
-  }
-  if (current.trim()) chunks.push(current.trim());
-
-  const result: string[] = [];
-  for (const chunk of chunks) {
-    if (chunk.length > targetSize * 2) {
-      let start = 0;
-      while (start < chunk.length) {
-        result.push(chunk.slice(start, start + targetSize).trim());
-        start += targetSize - overlap;
-      }
-    } else {
-      result.push(chunk);
-    }
-  }
-  return result;
-}
-
-function extractTextFromHtml(html: string): string {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, '\n')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"');
+function processingFailure(
+  res: import('express').Response,
+  documentId: string,
+  status: number,
+  reason: string
+): void {
+  void markDocumentFailed(documentId, reason);
+  res.status(status).json({ error: reason, failure_reason: reason });
 }
 
 async function generateEmbeddings(texts: string[]): Promise<number[][]> {
@@ -89,7 +82,7 @@ async function generateEmbeddings(texts: string[]): Promise<number[][]> {
 router.get('/:condocorpId', requireAuth, async (req, res) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const { condocorpId } = req.params;
+    const condocorpId = routeParam(req, 'condocorpId');
 
     if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
@@ -108,10 +101,25 @@ router.get('/:condocorpId', requireAuth, async (req, res) => {
 });
 
 // Upload document
-router.post('/:condocorpId', requireAuth, upload.single('file'), async (req, res) => {
+router.post('/:condocorpId', requireAuth, (req, res, next) => {
+  upload.single('file')(req, res, err => {
+    if (err) {
+      const message = err instanceof Error ? err.message : 'Upload failed';
+      const isTypeError =
+        message.includes('cannot be processed') || message.includes('Supported file types');
+      res.status(isTypeError ? 400 : 500).json({
+        error: message,
+        failure_reason: message,
+        code: isTypeError ? 'unsupported_type' : undefined,
+      });
+      return;
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const { condocorpId } = req.params;
+    const condocorpId = routeParam(req, 'condocorpId');
 
     if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
@@ -119,7 +127,17 @@ router.post('/:condocorpId', requireAuth, upload.single('file'), async (req, res
     }
 
     const file = req.file;
-    if (!file) { res.status(400).json({ error: 'No file uploaded' }); return; }
+    if (!file) {
+      res.status(400).json({ error: 'No file uploaded', failure_reason: 'No file uploaded' });
+      return;
+    }
+
+    const fileCheck = validateDocumentFilename(file.originalname);
+    if (!fileCheck.ok) {
+      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      res.status(400).json({ error: fileCheck.error, failure_reason: fileCheck.error, code: fileCheck.code });
+      return;
+    }
 
     const title = (req.body.title as string) || file.originalname.replace(/\.[^/.]+$/, '');
     const documentType = (req.body.document_type as string) || 'other';
@@ -133,7 +151,13 @@ router.post('/:condocorpId', requireAuth, upload.single('file'), async (req, res
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Upload error:', error);
-    res.status(500).json({ error: 'Failed to upload document' });
+    const message = error instanceof Error ? error.message : 'Failed to upload document';
+    const isTypeError = message.includes('cannot be processed') || message.includes('Supported file types');
+    res.status(isTypeError ? 400 : 500).json({
+      error: message,
+      failure_reason: isTypeError ? message : 'Failed to upload document',
+      code: isTypeError ? 'unsupported_type' : undefined,
+    });
   }
 });
 
@@ -141,14 +165,13 @@ router.post('/:condocorpId', requireAuth, upload.single('file'), async (req, res
 router.post('/:condocorpId/:documentId/process', requireAuth, async (req, res) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const { condocorpId, documentId } = req.params;
+    const condocorpId = routeParam(req, 'condocorpId');
+    const documentId = routeParam(req, 'documentId');
 
     if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
-
-    await pool.query(`UPDATE documents SET status = 'processing' WHERE id = $1`, [documentId]);
 
     const docResult = await pool.query(
       'SELECT * FROM documents WHERE id = $1 AND condocorp_id = $2',
@@ -157,59 +180,117 @@ router.post('/:condocorpId/:documentId/process', requireAuth, async (req, res) =
     if (docResult.rows.length === 0) { res.status(404).json({ error: 'Document not found' }); return; }
     const doc = docResult.rows[0];
 
+    const fileCheck = validateDocumentFilename(doc.filename);
+    if (!fileCheck.ok) {
+      processingFailure(res, documentId, 400, fileCheck.error);
+      return;
+    }
+    const ext = fileCheck.ext;
+
+    await pool.query(
+      `UPDATE documents SET status = 'processing', failure_reason = NULL WHERE id = $1`,
+      [documentId]
+    );
+
     const filePath = path.join(UPLOAD_DIR, doc.file_path);
     if (!fs.existsSync(filePath)) {
-      await pool.query(`UPDATE documents SET status = 'failed' WHERE id = $1`, [documentId]);
-      res.status(404).json({ error: 'File not found on disk' });
+      processingFailure(res, documentId, 404, PROCESSING_ERRORS.fileMissing);
       return;
     }
 
     let rawText = '';
-    const ext = doc.filename.toLowerCase().split('.').pop();
-
-    if (ext === 'txt') {
-      rawText = fs.readFileSync(filePath, 'utf-8');
-    } else if (ext === 'html' || ext === 'htm') {
-      rawText = extractTextFromHtml(fs.readFileSync(filePath, 'utf-8'));
-    } else if (ext === 'pdf') {
-      const fileBytes = new Uint8Array(fs.readFileSync(filePath));
-      const parser = new PDFParse(fileBytes);
-      const pdfData = await parser.getText();
-      rawText = pdfData.text;
-    } else if (ext === 'docx') {
-      const buffer = fs.readFileSync(filePath);
-      const result = await mammoth.extractRawText({ buffer });
-      rawText = result.value;
-    } else {
-      rawText = fs.readFileSync(filePath, 'utf-8');
+    try {
+      if (ext === 'txt') {
+        rawText = fs.readFileSync(filePath, 'utf-8');
+      } else if (ext === 'html' || ext === 'htm') {
+        rawText = extractTextFromHtml(fs.readFileSync(filePath, 'utf-8'));
+      } else if (ext === 'pdf') {
+        rawText = await extractPdfText(filePath);
+      } else if (isImageExtension(ext)) {
+        rawText = await extractImageText(filePath);
+      } else if (ext === 'docx') {
+        const buffer = fs.readFileSync(filePath);
+        const result = await mammoth.extractRawText({ buffer });
+        rawText = result.value;
+      }
+    } catch (extractError) {
+      const detail = extractError instanceof Error ? extractError.message : 'Extraction failed';
+      const reason = detail.includes('DISABLE_OCR')
+        ? PROCESSING_ERRORS.ocrDisabled
+        : detail.includes('OCR')
+          ? PROCESSING_ERRORS.ocrFailed
+          : `Could not read this ${ext.toUpperCase()} file (${detail}). ${SUPPORTED_FORMATS_HELP}`;
+      processingFailure(res, documentId, 400, reason);
+      return;
     }
 
     const cleanedText = cleanText(rawText);
     if (!cleanedText) {
-      await pool.query(`UPDATE documents SET status = 'failed' WHERE id = $1`, [documentId]);
-      res.status(400).json({ error: 'No text content extracted' });
+      const reason = isImageExtension(ext) || ext === 'pdf'
+        ? (isOcrEnabled() ? PROCESSING_ERRORS.ocrFailed : PROCESSING_ERRORS.ocrDisabled)
+        : PROCESSING_ERRORS.noTextExtracted(ext);
+      processingFailure(res, documentId, 400, reason);
+      return;
+    }
+
+    try {
+      assertMeaningfulDocumentText(cleanedText);
+    } catch (validationError) {
+      const message =
+        validationError instanceof Error ? validationError.message : PROCESSING_ERRORS.scannedPdf;
+      const reason = isOcrEnabled() ? PROCESSING_ERRORS.scannedPdf : `${message} ${PROCESSING_ERRORS.ocrDisabled}`;
+      processingFailure(res, documentId, 400, reason);
       return;
     }
 
     const textChunks = chunkText(cleanedText);
-    await pool.query(`UPDATE documents SET status = 'chunked' WHERE id = $1`, [documentId]);
-
-    // Delete existing chunks (for reprocessing)
-    await pool.query('DELETE FROM document_chunks WHERE document_id = $1', [documentId]);
-
-    const embeddings = await generateEmbeddings(textChunks);
-
-    // Insert chunks with embeddings
-    for (let i = 0; i < textChunks.length; i++) {
-      const embeddingStr = `[${embeddings[i].join(',')}]`;
-      await pool.query(
-        `INSERT INTO document_chunks (condocorp_id, document_id, chunk_number, chunk_text, embedding)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [condocorpId, documentId, i + 1, textChunks[i], embeddingStr]
-      );
+    if (textChunks.length === 0) {
+      processingFailure(res, documentId, 400, PROCESSING_ERRORS.noChunks);
+      return;
     }
 
-    await pool.query(`UPDATE documents SET status = 'indexed' WHERE id = $1`, [documentId]);
+    let embeddings: number[][];
+    try {
+      embeddings = await generateEmbeddings(textChunks);
+    } catch (embedError) {
+      const message = embedError instanceof Error ? embedError.message : '';
+      const reason = message.includes('OPENAI_API_KEY')
+        ? PROCESSING_ERRORS.openaiNotConfigured
+        : `Indexing failed: ${message || 'embedding service error'}. Try Reprocess.`;
+      processingFailure(res, documentId, 500, reason);
+      return;
+    }
+
+    if (embeddings.length !== textChunks.length) {
+      processingFailure(res, documentId, 500, PROCESSING_ERRORS.embeddingMismatch);
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM document_chunks WHERE document_id = $1', [documentId]);
+
+      for (let i = 0; i < textChunks.length; i++) {
+        const embeddingStr = `[${embeddings[i].join(',')}]`;
+        await client.query(
+          `INSERT INTO document_chunks (condocorp_id, document_id, chunk_number, chunk_text, embedding)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [condocorpId, documentId, i + 1, textChunks[i], embeddingStr]
+        );
+      }
+
+      await client.query(
+        `UPDATE documents SET status = 'indexed', failure_reason = NULL WHERE id = $1`,
+        [documentId]
+      );
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
 
     await pool.query(
       `INSERT INTO audit_logs (condocorp_id, user_id, action, details)
@@ -220,7 +301,57 @@ router.post('/:condocorpId/:documentId/process', requireAuth, async (req, res) =
     res.json({ success: true, chunks_created: textChunks.length });
   } catch (error) {
     console.error('Processing error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Processing failed' });
+    const failedDocId = routeParam(req, 'documentId');
+    const message = error instanceof Error ? error.message : PROCESSING_ERRORS.generic;
+    const reason = message.includes('OPENAI_API_KEY')
+      ? PROCESSING_ERRORS.openaiNotConfigured
+      : message || PROCESSING_ERRORS.generic;
+    if (failedDocId) {
+      try {
+        await markDocumentFailed(failedDocId, reason);
+      } catch (statusError) {
+        console.error('Failed to mark document as failed:', statusError);
+      }
+    }
+    res.status(500).json({ error: reason, failure_reason: reason });
+  }
+});
+
+// Download / view original uploaded file
+router.get('/:condocorpId/:documentId/file', requireAuth, async (req, res) => {
+  try {
+    const { userId } = req as AuthenticatedRequest;
+    const condocorpId = routeParam(req, 'condocorpId');
+    const documentId = routeParam(req, 'documentId');
+
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    const docResult = await pool.query(
+      'SELECT filename, file_path FROM documents WHERE id = $1 AND condocorp_id = $2',
+      [documentId, condocorpId]
+    );
+    if (docResult.rows.length === 0) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    const doc = docResult.rows[0];
+    const filePath = path.join(UPLOAD_DIR, doc.file_path);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: PROCESSING_ERRORS.fileMissing });
+      return;
+    }
+
+    const contentType = contentTypeForFilename(doc.filename);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.filename)}"`);
+    res.sendFile(path.resolve(filePath));
+  } catch (error) {
+    console.error('Get document file error:', error);
+    res.status(500).json({ error: 'Failed to fetch document file' });
   }
 });
 
@@ -228,7 +359,8 @@ router.post('/:condocorpId/:documentId/process', requireAuth, async (req, res) =
 router.get('/:condocorpId/:documentId/chunks', requireAuth, async (req, res) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const { condocorpId, documentId } = req.params;
+    const condocorpId = routeParam(req, 'condocorpId');
+    const documentId = routeParam(req, 'documentId');
 
     if (!(await hasCondoCorpAccess(userId, condocorpId))) {
       res.status(403).json({ error: 'Access denied' });
@@ -252,10 +384,11 @@ router.get('/:condocorpId/:documentId/chunks', requireAuth, async (req, res) => 
 router.delete('/:condocorpId/:documentId', requireAuth, async (req, res) => {
   try {
     const { userId } = req as AuthenticatedRequest;
-    const { condocorpId, documentId } = req.params;
+    const condocorpId = routeParam(req, 'condocorpId');
+    const documentId = routeParam(req, 'documentId');
 
-    if (!(await hasCondoCorpAdminAccess(userId, condocorpId))) {
-      res.status(403).json({ error: 'Admin access required' });
+    if (!(await hasCondoCorpAccess(userId, condocorpId))) {
+      res.status(403).json({ error: 'Access denied' });
       return;
     }
 

@@ -3,6 +3,7 @@ import { pool } from '../db.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware.js';
 import {
   CONTEXT_PLACEHOLDER,
+  QUESTION_PLACEHOLDER,
   DEFAULT_LLM_PROMPT_TEMPLATE,
 } from '../llm-prompt.js';
 
@@ -33,6 +34,7 @@ router.get('/', requireAuth, async (req, res) => {
       template: row?.template ?? DEFAULT_LLM_PROMPT_TEMPLATE,
       default_template: DEFAULT_LLM_PROMPT_TEMPLATE,
       context_placeholder: CONTEXT_PLACEHOLDER,
+      question_placeholder: QUESTION_PLACEHOLDER,
       updated_at: row?.updated_at ?? null,
     });
   } catch (error) {
@@ -60,6 +62,12 @@ router.put('/', requireAuth, async (req, res) => {
       });
       return;
     }
+    if (!template.includes(QUESTION_PLACEHOLDER)) {
+      res.status(400).json({
+        error: `Prompt must include the ${QUESTION_PLACEHOLDER} placeholder where the user's question is inserted`,
+      });
+      return;
+    }
 
     const result = await pool.query(
       `INSERT INTO platform_llm_prompt (id, template, updated_at)
@@ -73,6 +81,7 @@ router.put('/', requireAuth, async (req, res) => {
       template: result.rows[0].template,
       default_template: DEFAULT_LLM_PROMPT_TEMPLATE,
       context_placeholder: CONTEXT_PLACEHOLDER,
+      question_placeholder: QUESTION_PLACEHOLDER,
       updated_at: result.rows[0].updated_at,
     });
   } catch (error) {

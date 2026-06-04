@@ -45,6 +45,8 @@ export function ChatPage() {
   const [creatingTicket, setCreatingTicket] = useState(false);
   const [ticketCreated, setTicketCreated] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  /** Skip the messages fetch when a conversation was just created mid-send (fetch would return []). */
+  const skipNextMessagesFetchRef = useRef(false);
 
   useEffect(() => {
     if (!activeCondoCorp) return;
@@ -62,7 +64,14 @@ export function ChatPage() {
   }, [activeCondoCorp]);
 
   useEffect(() => {
-    if (!activeConversation) { setMessages([]); return; }
+    if (!activeConversation) {
+      setMessages([]);
+      return;
+    }
+    if (skipNextMessagesFetchRef.current) {
+      skipNextMessagesFetchRef.current = false;
+      return;
+    }
     chat.messages(activeConversation.id).then(data => {
       setMessages(data as MessageItem[]);
     }).catch(() => {});
@@ -72,10 +81,13 @@ export function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const createConversation = async () => {
+  const createConversation = async (options?: { skipMessagesFetch?: boolean }) => {
     if (!activeCondoCorp) return null;
     const data = await chat.createConversation(activeCondoCorp.id);
     setConversations(prev => [data, ...prev]);
+    if (options?.skipMessagesFetch) {
+      skipNextMessagesFetchRef.current = true;
+    }
     setActiveConversation(data);
     return data;
   };
@@ -91,7 +103,7 @@ export function ChatPage() {
 
     let convo = activeConversation;
     if (!convo) {
-      convo = await createConversation();
+      convo = await createConversation({ skipMessagesFetch: true });
       if (!convo) { setSending(false); return; }
     }
 
@@ -257,10 +269,18 @@ export function ChatPage() {
                 {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-100">
                     <div className="text-xs font-medium text-gray-500 mb-1.5">Sources:</div>
-                    {msg.sources.map((src, i) => (
-                      <div key={i} className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                    {[...msg.sources
+                      .reduce((byTitle, src) => {
+                        const prev = byTitle.get(src.document_title);
+                        if (!prev || src.similarity > prev.similarity) {
+                          byTitle.set(src.document_title, src);
+                        }
+                        return byTitle;
+                      }, new Map<string, (typeof msg.sources)[number]>())
+                      .values()].map(src => (
+                      <div key={src.document_title} className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
                         <FileText size={12} />
-                        <span>{src.document_title} (chunk {src.chunk_number})</span>
+                        <span>{src.document_title}</span>
                         <span className="text-gray-300">
                           {Math.round(src.similarity * 100)}% match
                         </span>

@@ -1,10 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
+import { useDropzone, type FileRejection } from 'react-dropzone';
 import { Upload, FileText, Trash2, RefreshCw, Eye, X } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useAuthStore } from '../stores/authStore';
-import { documents } from '../lib/api';
+import { ApiError, documents } from '../lib/api';
+import {
+  DROPZONE_ACCEPT,
+  SUPPORTED_FORMATS_HELP,
+  getFileExtension,
+  validateDocumentFilename,
+} from '../lib/documentFormats';
 import type { DocumentType } from '../types';
 
 const DOCUMENT_TYPES: { value: DocumentType; label: string }[] = [
@@ -25,13 +31,12 @@ interface DocItem {
   filename: string;
   document_type: string;
   status: string;
+  failure_reason: string | null;
   created_at: string;
 }
 
-interface ChunkItem {
-  id: string;
-  chunk_number: number;
-  chunk_text: string;
+function isImageExtension(ext: string): boolean {
+  return ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'gif', 'bmp'].includes(ext);
 }
 
 export function DocumentsPage() {
@@ -42,8 +47,11 @@ export function DocumentsPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [docType, setDocType] = useState<DocumentType>('other');
   const [title, setTitle] = useState('');
-  const [selectedDoc, setSelectedDoc] = useState<DocItem | null>(null);
-  const [chunks, setChunks] = useState<ChunkItem[]>([]);
+  const [viewingDoc, setViewingDoc] = useState<DocItem | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
 
   const loadDocuments = useCallback(async () => {
     if (!activeCondoCorp) return;
@@ -57,12 +65,29 @@ export function DocumentsPage() {
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (!activeCondoCorp || acceptedFiles.length === 0) return;
     setUploading(true);
+    setActionError(null);
 
     for (const file of acceptedFiles) {
+      const typeError = validateDocumentFilename(file.name);
+      if (typeError) {
+        setActionError(typeError);
+        continue;
+      }
+
       const docTitle = title || file.name.replace(/\.[^/.]+$/, '');
-      const doc = await documents.upload(activeCondoCorp.id, file, docTitle, docType);
-      if (doc?.id) {
-        documents.process(activeCondoCorp.id, doc.id).catch(console.error);
+      try {
+        const doc = await documents.upload(activeCondoCorp.id, file, docTitle, docType);
+        if (doc?.id) {
+          try {
+            await documents.process(activeCondoCorp.id, doc.id);
+          } catch (err) {
+            const msg = err instanceof ApiError ? err.message : 'Processing failed after upload';
+            setActionError(`${file.name}: ${msg}`);
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Upload failed';
+        setActionError(`${file.name}: ${msg}`);
       }
     }
 
@@ -73,34 +98,81 @@ export function DocumentsPage() {
     loadDocuments();
   }, [activeCondoCorp, docType, title, loadDocuments]);
 
+  const onDropRejected = useCallback((fileRejections: FileRejection[]) => {
+    const messages = fileRejections.map(rejection => {
+      const typeError = validateDocumentFilename(rejection.file.name);
+      if (typeError) return `${rejection.file.name}: ${typeError}`;
+      return `${rejection.file.name}: ${rejection.errors.map(e => e.message).join(', ')}`;
+    });
+    setActionError(messages.join(' '));
+  }, []);
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      'application/pdf': ['.pdf'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-      'text/plain': ['.txt'],
-      'text/html': ['.html'],
-    },
+    onDropRejected,
+    accept: DROPZONE_ACCEPT,
     maxFiles: 10,
   });
 
+  const canReprocess = (doc: DocItem) =>
+    doc.status !== 'indexed' && doc.status !== 'processing';
+
   const reprocessDocument = async (doc: DocItem) => {
-    if (!activeCondoCorp) return;
-    await documents.process(activeCondoCorp.id, doc.id);
-    loadDocuments();
+    if (!activeCondoCorp || !canReprocess(doc)) return;
+    setActionError(null);
+    setProcessingId(doc.id);
+    setDocList(prev =>
+      prev.map(d =>
+        d.id === doc.id ? { ...d, status: 'processing', failure_reason: null } : d
+      )
+    );
+    try {
+      await documents.process(activeCondoCorp.id, doc.id);
+      await loadDocuments();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Reprocessing failed');
+      await loadDocuments();
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   const deleteDocument = async (doc: DocItem) => {
     if (!activeCondoCorp) return;
-    await documents.delete(activeCondoCorp.id, doc.id);
-    loadDocuments();
+    if (!window.confirm(`Delete "${doc.title}" and all of its chunks?`)) return;
+    setActionError(null);
+    try {
+      await documents.delete(activeCondoCorp.id, doc.id);
+      if (viewingDoc?.id === doc.id) {
+        closePreview();
+      }
+      await loadDocuments();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
   };
 
-  const viewChunks = async (doc: DocItem) => {
+  const closePreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setViewingDoc(null);
+  };
+
+  const viewDocument = async (doc: DocItem) => {
     if (!activeCondoCorp) return;
-    setSelectedDoc(doc);
-    const data = await documents.chunks(activeCondoCorp.id, doc.id);
-    setChunks(data);
+    closePreview();
+    setViewingDoc(doc);
+    setPreviewLoading(true);
+    setActionError(null);
+    try {
+      const blob = await documents.file(activeCondoCorp.id, doc.id);
+      setPreviewUrl(URL.createObjectURL(blob));
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Failed to load document');
+      setViewingDoc(null);
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
   if (loading) {
@@ -113,6 +185,12 @@ export function DocumentsPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl">
+      {actionError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {actionError}
+        </div>
+      )}
+
       <PageHeader
         title="Documents"
         description="Upload and manage your CondoCorp documents"
@@ -164,7 +242,9 @@ export function DocumentsPage() {
             <input {...getInputProps()} />
             <Upload className="mx-auto text-gray-400 mb-3" size={32} />
             {uploading ? (
-              <p className="text-sm text-gray-500">Uploading...</p>
+              <p className="text-sm text-gray-500">
+                Uploading and indexing… scanned PDFs may take several minutes.
+              </p>
             ) : isDragActive ? (
               <p className="text-sm text-primary-600">Drop files here</p>
             ) : (
@@ -172,7 +252,7 @@ export function DocumentsPage() {
                 <p className="text-sm text-gray-700 font-medium">
                   Drag & drop files here, or click to browse
                 </p>
-                <p className="text-xs text-gray-400 mt-1">PDF, DOCX, TXT, HTML (max 10 files)</p>
+                <p className="text-xs text-gray-400 mt-1 max-w-lg mx-auto">{SUPPORTED_FORMATS_HELP}</p>
               </>
             )}
           </div>
@@ -213,26 +293,38 @@ export function DocumentsPage() {
                     <td className="px-4 py-3 capitalize text-gray-600">
                       {doc.document_type.replace('_', ' ')}
                     </td>
-                    <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <StatusBadge status={doc.status} />
+                        {doc.status === 'failed' && doc.failure_reason && (
+                          <p className="text-xs text-red-600 max-w-xs" title={doc.failure_reason}>
+                            {doc.failure_reason}
+                          </p>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-gray-500">
                       {new Date(doc.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button
-                          onClick={() => viewChunks(doc)}
+                          onClick={() => viewDocument(doc)}
                           className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-primary-50 transition-colors"
-                          title="View chunks"
+                          title="View document"
                         >
                           <Eye size={16} />
                         </button>
-                        <button
-                          onClick={() => reprocessDocument(doc)}
-                          className="p-1.5 text-gray-400 hover:text-yellow-600 rounded-lg hover:bg-yellow-50 transition-colors"
-                          title="Reprocess"
-                        >
-                          <RefreshCw size={16} />
-                        </button>
+                        {canReprocess(doc) && (
+                          <button
+                            onClick={() => reprocessDocument(doc)}
+                            disabled={processingId === doc.id}
+                            className="p-1.5 text-gray-400 hover:text-yellow-600 rounded-lg hover:bg-yellow-50 transition-colors disabled:opacity-50"
+                            title="Reprocess"
+                          >
+                            <RefreshCw size={16} className={processingId === doc.id ? 'animate-spin' : ''} />
+                          </button>
+                        )}
                         <button
                           onClick={() => deleteDocument(doc)}
                           className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
@@ -250,34 +342,78 @@ export function DocumentsPage() {
         </div>
       </div>
 
-      {selectedDoc && (
+      {viewingDoc && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-3xl w-full max-h-[80vh] flex flex-col">
+          <div className="bg-white rounded-xl max-w-5xl w-full max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-              <h3 className="font-semibold text-gray-900">
-                Chunks: {selectedDoc.title} ({chunks.length} chunks)
-              </h3>
+              <div>
+                <h3 className="font-semibold text-gray-900">{viewingDoc.title}</h3>
+                <p className="text-xs text-gray-500">{viewingDoc.filename}</p>
+              </div>
               <button
-                onClick={() => { setSelectedDoc(null); setChunks([]); }}
+                onClick={closePreview}
                 className="p-1 text-gray-400 hover:text-gray-600"
               >
                 <X size={20} />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-5 space-y-3">
-              {chunks.map(chunk => (
-                <div key={chunk.id} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-gray-500">
-                      Chunk #{chunk.chunk_number}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {chunk.chunk_text.length} chars
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{chunk.chunk_text}</p>
+            <div className="flex-1 overflow-hidden min-h-0">
+              {previewLoading ? (
+                <div className="flex justify-center py-12">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
                 </div>
-              ))}
+              ) : previewUrl ? (
+                (() => {
+                  const ext = getFileExtension(viewingDoc.filename);
+                  if (ext === 'docx') {
+                    return (
+                      <div className="p-8 text-center space-y-4">
+                        <p className="text-sm text-gray-600">
+                          Word documents cannot be previewed in the browser.
+                        </p>
+                        <a
+                          href={previewUrl}
+                          download={viewingDoc.filename}
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700"
+                        >
+                          Download {viewingDoc.filename}
+                        </a>
+                      </div>
+                    );
+                  }
+                  if (ext === 'pdf' || ext === 'html' || ext === 'htm') {
+                    return (
+                      <iframe
+                        src={previewUrl}
+                        title={viewingDoc.title}
+                        className="w-full h-full min-h-[70vh] border-0"
+                      />
+                    );
+                  }
+                  if (isImageExtension(ext)) {
+                    return (
+                      <div className="overflow-auto p-4 flex justify-center items-start h-full min-h-[70vh]">
+                        <img
+                          src={previewUrl}
+                          alt={viewingDoc.title}
+                          className="max-w-full h-auto"
+                        />
+                      </div>
+                    );
+                  }
+                  return (
+                    <iframe
+                      src={previewUrl}
+                      title={viewingDoc.title}
+                      className="w-full h-full min-h-[70vh] border-0"
+                    />
+                  );
+                })()
+              ) : (
+                <p className="text-sm text-gray-500 text-center py-8">
+                  Could not load this document. The file may be missing from storage — try deleting and uploading again.
+                </p>
+              )}
             </div>
           </div>
         </div>
